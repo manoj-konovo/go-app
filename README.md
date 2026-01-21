@@ -30,7 +30,7 @@ docker run --rm -p 8080:8080 go-app:local
 - AWS CLI v2 configured with access to the target account.
 - kubectl installed and pointed at an EKS cluster.
 - An Amazon ECR repository (for example `go-app`).
-- IAM role configured for GitHub Actions OIDC federation with permissions for ECR (push) and EKS (deploy).
+- AWS account access keys (root in this simplified setup) with rights to push to ECR and administer the target EKS cluster. **Storing root credentials is high risk—rotate them frequently and prefer scoped IAM users in production.**
 
 ### Manifests
 
@@ -54,9 +54,9 @@ The workflow at `.github/workflows/cicd.yml` builds the Docker image, pushes it 
 
 Required GitHub secrets:
 
-- `AWS_ACCOUNT_ID` (optional if encoded in the assume-role policy but handy for documentation).
 - `AWS_REGION` – target AWS region (for example `us-east-1`).
-- `AWS_ROLE_TO_ASSUME` – ARN of the IAM role the workflow should assume.
+- `AWS_ACCESS_KEY_ID` – access key for the AWS root (or other) user executing deployments.
+- `AWS_SECRET_ACCESS_KEY` – companion secret key.
 - `ECR_REPOSITORY` – ECR repository name (for example `go-app`).
 - `EKS_CLUSTER_NAME` – name of the target EKS cluster.
 
