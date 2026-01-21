@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: go-app
-          image: 000000000000.dkr.ecr.us-east-1.amazonaws.com/go-app:latest
+          image: 812541449145.dkr.ecr.us-east-2.amazonaws.com/go-app:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
