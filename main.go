@@ -11,12 +11,9 @@ import (
 )
 
 func main() {
-	// load .env file
-	// godotenv package
-	port := goDotEnvVariable("PORT")
-	if port == "" {
-		port = "8080" // Default port
-	}
+	loadDotEnv()
+
+	port := getEnv("PORT", "8080")
 
 	// Initialize logging
 	log.SetOutput(os.Stdout)
@@ -31,16 +28,17 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
-// use godot package to load/read the .env file and
-// return the value of the key
-func goDotEnvVariable(key string) string {
-
-	// load .env file
-	err := env.Load(".env")
-
-	if err != nil {
-		log.Fatalf("Error loading .env file")
+func loadDotEnv() {
+	if _, err := os.Stat(".env"); err == nil {
+		if err := env.Load(".env"); err != nil {
+			log.Printf("Unable to load .env file: %v", err)
+		}
 	}
+}
 
-	return os.Getenv(key)
+func getEnv(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok && value != "" {
+		return value
+	}
+	return fallback
 }
