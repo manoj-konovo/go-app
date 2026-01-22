@@ -61,7 +61,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Update kubeconfig
-        run: aws eks update-kubeconfig --name $EKS_CLUSTER_NAME --region $AWS_REGION
+        run: aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
 
       - name: Apply namespace
         run: kubectl apply -f k8s/namespace.yaml
@@ -75,7 +75,12 @@ jobs:
       - name: Update deployment image
         env:
           ECR_REGISTRY: ${{ needs.build-and-push.outputs.ecr-registry }}
-        run: kubectl set image deployment/go-app go-app=$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }} --namespace go-app
+        run: |
+          kubectl set image deployment/go-app go-app=$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }} --namespace go-app
+          kubectl annotate deployment go-app deployment.kubernetes.io/revision- --namespace go-app
 
       - name: Verify rollout
-        run: kubectl rollout status deployment/go-app --namespace go-app
+        run: |
+          kubectl rollout status deployment/go-app --namespace go-app --timeout=300s
+          kubectl get pods --namespace go-app -l app=go-app
+          kubectl describe deployment go-app --namespace go-app
