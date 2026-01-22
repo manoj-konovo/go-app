@@ -19,6 +19,7 @@ spec:
       labels:
         app: go-app
     spec:
+      terminationGracePeriodSeconds: 30
       containers:
         - name: go-app
           image: placeholder:latest
@@ -60,4 +61,3 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
-          terminationGracePeriodSeconds: 30
