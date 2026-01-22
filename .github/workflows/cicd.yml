@@ -34,6 +34,14 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Debug ECR registry output
+        run: |
+          echo "ECR Registry: ${{ steps.login-ecr.outputs.registry }}"
+          if [ -z "${{ steps.login-ecr.outputs.registry }}" ]; then
+            echo "❌ Error: ECR registry output is empty"
+            exit 1
+          fi
+
       - name: Build image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -79,15 +87,40 @@ jobs:
       - name: Apply deployment
         run: kubectl apply -f k8s/deployment.yaml
 
+      - name: Clean up failed pods
+        run: |
+          echo "Cleaning up failed pods..."
+          # Delete pods with ImagePullBackOff or InvalidImageName status
+          kubectl get pods --namespace go-app -l app=go-app --field-selector=status.phase=Pending -o name | xargs -r kubectl delete --namespace go-app --grace-period=0 --force
+          
+          # Scale down and up to force new pods
+          kubectl scale deployment go-app --namespace go-app --replicas=0
+          sleep 5
+          kubectl scale deployment go-app --namespace go-app --replicas=2
+
       - name: Debug before deployment update
+        env:
+          ECR_REGISTRY: ${{ needs.build-and-push.outputs.ecr-registry }}
         run: |
           echo "Current deployment status:"
           kubectl get deployment go-app --namespace go-app -o wide
           kubectl get pods --namespace go-app -l app=go-app -o wide
           kubectl get events --namespace go-app --sort-by='.lastTimestamp' | tail -10          
+          
+          # Debug ECR registry value
+          echo "ECR_REGISTRY value: '$ECR_REGISTRY'"
+          echo "ECR_REPOSITORY value: '${{ env.ECR_REPOSITORY }}'"
+          echo "IMAGE_TAG value: '${{ env.IMAGE_TAG }}'"
+          
           # Test if ECR image can be pulled
-          NEW_IMAGE=\"${{ needs.build-and-push.outputs.ecr-registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}\"
-          echo \"Testing if image can be pulled: $NEW_IMAGE\"
+          NEW_IMAGE="$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"
+          echo "Testing if image can be pulled: $NEW_IMAGE"
+          
+          if [ -z "$ECR_REGISTRY" ]; then
+            echo "❌ ECR_REGISTRY is empty! This will cause image pull failures."
+            exit 1
+          fi
+          
           docker pull $NEW_IMAGE && echo \"✅ Image pull successful\" || echo \"❌ Image pull failed\"
       - name: Update deployment image
         env:
@@ -95,8 +128,27 @@ jobs:
         run: |
           NEW_IMAGE="$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"
           echo "Updating deployment with image: $NEW_IMAGE"
-          kubectl set image deployment/go-app go-app=$NEW_IMAGE --namespace go-app
-          kubectl annotate deployment go-app deployment.kubernetes.io/revision- --namespace go-app
+          
+          # Validate image name format
+          if [ -z "$ECR_REGISTRY" ]; then
+            echo "❌ Error: ECR_REGISTRY is empty"
+            exit 1
+          fi
+          
+          if [[ ! "$NEW_IMAGE" =~ ^[a-z0-9.-]+\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/.+ ]]; then
+            echo "❌ Error: Invalid image format: $NEW_IMAGE"
+            echo "Expected format: <account>.dkr.ecr.<region>.amazonaws.com/<repository>:<tag>"
+            exit 1
+          fi
+          
+          # Force update the deployment with new image using patch
+          kubectl patch deployment go-app --namespace go-app -p "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"go-app\",\"image\":\"$NEW_IMAGE\"}]}}}}"
+          
+          # Remove old revision annotation to trigger rollout
+          kubectl annotate deployment go-app --namespace go-app deployment.kubernetes.io/revision- || true
+          
+          # Force restart to clear any stuck replicas
+          kubectl rollout restart deployment/go-app --namespace go-app
 
       - name: Wait for rollout with debugging
         run: |
