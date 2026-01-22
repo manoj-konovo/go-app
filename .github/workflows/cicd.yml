@@ -37,12 +37,19 @@ jobs:
       - name: Build image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        run: docker build -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }} .
+        run: |
+          echo "Building image: $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"
+          docker build -t $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }} .
+          echo "Verifying image was built successfully..."
+          docker images | grep ${{ env.ECR_REPOSITORY }}
 
       - name: Push image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        run: docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+        run: |
+          echo "Pushing image: $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"
+          docker push $ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+          echo "Image pushed successfully"
 
   deploy:
     needs: build-and-push
@@ -72,15 +79,42 @@ jobs:
       - name: Apply deployment
         run: kubectl apply -f k8s/deployment.yaml
 
+      - name: Debug before deployment update
+        run: |
+          echo "Current deployment status:"
+          kubectl get deployment go-app --namespace go-app -o wide
+          kubectl get pods --namespace go-app -l app=go-app -o wide
+          kubectl get events --namespace go-app --sort-by='.lastTimestamp' | tail -10          
+          # Test if ECR image can be pulled
+          NEW_IMAGE=\"${{ needs.build-and-push.outputs.ecr-registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}\"
+          echo \"Testing if image can be pulled: $NEW_IMAGE\"
+          docker pull $NEW_IMAGE && echo \"✅ Image pull successful\" || echo \"❌ Image pull failed\"
       - name: Update deployment image
         env:
           ECR_REGISTRY: ${{ needs.build-and-push.outputs.ecr-registry }}
         run: |
-          kubectl set image deployment/go-app go-app=$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }} --namespace go-app
+          NEW_IMAGE="$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"
+          echo "Updating deployment with image: $NEW_IMAGE"
+          kubectl set image deployment/go-app go-app=$NEW_IMAGE --namespace go-app
           kubectl annotate deployment go-app deployment.kubernetes.io/revision- --namespace go-app
 
-      - name: Verify rollout
+      - name: Wait for rollout with debugging
         run: |
-          kubectl rollout status deployment/go-app --namespace go-app --timeout=300s
-          kubectl get pods --namespace go-app -l app=go-app
-          kubectl describe deployment go-app --namespace go-app
+          echo "Starting rollout status check..."
+          if ! kubectl rollout status deployment/go-app --namespace go-app --timeout=180s; then
+            echo "Rollout failed or timed out. Debugging..."
+            echo "\n=== Deployment Status ==="
+            kubectl get deployment go-app --namespace go-app -o wide
+            echo "\n=== Pod Status ==="
+            kubectl get pods --namespace go-app -l app=go-app -o wide
+            echo "\n=== Pod Details ==="
+            kubectl describe pods --namespace go-app -l app=go-app
+            echo "\n=== Recent Events ==="
+            kubectl get events --namespace go-app --sort-by='.lastTimestamp' | tail -20
+            echo "\n=== ReplicaSet Status ==="
+            kubectl get rs --namespace go-app -l app=go-app
+            exit 1
+          fi
+          
+          echo "\n=== Final Pod Status ==="
+          kubectl get pods --namespace go-app -l app=go-app -o wide

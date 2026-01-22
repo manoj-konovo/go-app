@@ -21,6 +21,7 @@ func main() {
 
 	// Register API handlers
 	http.HandleFunc("/", handlers.HelloHandler)
+	http.HandleFunc("/health", handlers.HealthHandler)
 	http.HandleFunc("/items", handlers.ItemsHandler)
 	http.HandleFunc("/randomuser", handlers.GetRandomUser)
 
