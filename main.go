@@ -23,7 +23,7 @@ func main() {
 	http.HandleFunc("/", handlers.HelloHandler)
 	http.HandleFunc("/health", handlers.HealthHandler)
 	http.HandleFunc("/items", handlers.ItemsHandler)
-	http.HandleFunc("/randomuser", handlers.GetRandomUser)
+	http.HandleFunc("/user", handlers.GetUser)
 
 	fmt.Println("Server listening on port", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))

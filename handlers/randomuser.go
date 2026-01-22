@@ -6,7 +6,7 @@ import (
 	"github.com/integrationninjas/go-app/models"
 )
 
-func GetRandomUser(w http.ResponseWriter, r *http.Request) {
+func GetUser(w http.ResponseWriter, r *http.Request) {
 	userData := getStaticUserData()
 	encodeJSON(w, userData.Results[0]) // Encode and return the first user data
 }
