@@ -11,3 +11,7 @@ spec:
     - port: 80
       targetPort: 8080
       protocol: TCP
+
+    
+# Traffic flow
+# Internet → LoadBalancer (Port 80) → Service → Healthy Pods (Port 8080)

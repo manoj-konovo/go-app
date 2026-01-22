@@ -15,15 +15,13 @@ func main() {
 
 	port := getEnv("PORT", "8080")
 
-	// Initialize logging
 	log.SetOutput(os.Stdout)
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	// Register API handlers
 	http.HandleFunc("/", handlers.HelloHandler)
-	http.HandleFunc("/health", handlers.HealthHandler)
-	http.HandleFunc("/items", handlers.ItemsHandler)
 	http.HandleFunc("/user", handlers.GetUser)
+	http.HandleFunc("/items", handlers.ItemsHandler)
+	http.HandleFunc("/health", handlers.HealthHandler)
 
 	fmt.Println("Server listening on port", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
