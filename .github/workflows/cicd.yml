@@ -18,7 +18,8 @@ jobs:
     permissions:
       contents: read
     outputs:
-      ecr-registry: ${{ steps.login-ecr.outputs.registry }}
+      ecr-registry: ${{ steps.login-ecr.outputs.registry || steps.login-ecr.outputs.ecr-registry-manual }}
+      aws-account-id: ${{ steps.debug-aws.outputs.aws-account-id }}
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -30,16 +31,34 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Debug AWS setup
+        id: debug-aws
+        run: |
+          echo "AWS Region: ${{ env.AWS_REGION }}"
+          echo "ECR Repository: ${{ env.ECR_REPOSITORY }}"
+          aws --version
+          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "AWS Account ID: $AWS_ACCOUNT_ID"
+          echo "aws-account-id=$AWS_ACCOUNT_ID" >> $GITHUB_OUTPUT
+          echo "Testing ECR access..."
+          aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} --region ${{ env.AWS_REGION }} || echo "ECR repository access failed"
+
       - name: Log in to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Debug ECR registry output
         run: |
-          echo "ECR Registry: ${{ steps.login-ecr.outputs.registry }}"
+          echo "ECR Registry from login step: '${{ steps.login-ecr.outputs.registry }}'"
           if [ -z "${{ steps.login-ecr.outputs.registry }}" ]; then
             echo "❌ Error: ECR registry output is empty"
-            exit 1
+            echo "Manually constructing ECR registry URL..."
+            AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+            MANUAL_ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+            echo "Manual ECR Registry: $MANUAL_ECR_REGISTRY"
+            echo "ecr-registry-manual=$MANUAL_ECR_REGISTRY" >> $GITHUB_OUTPUT
+          else
+            echo "✅ ECR registry output is valid"
           fi
 
       - name: Build image
@@ -101,6 +120,7 @@ jobs:
       - name: Debug before deployment update
         env:
           ECR_REGISTRY: ${{ needs.build-and-push.outputs.ecr-registry }}
+          AWS_ACCOUNT_ID: ${{ needs.build-and-push.outputs.aws-account-id }}
         run: |
           echo "Current deployment status:"
           kubectl get deployment go-app --namespace go-app -o wide
@@ -108,34 +128,53 @@ jobs:
           kubectl get events --namespace go-app --sort-by='.lastTimestamp' | tail -10          
           
           # Debug ECR registry value
-          echo "ECR_REGISTRY value: '$ECR_REGISTRY'"
+          echo "ECR_REGISTRY from build job: '$ECR_REGISTRY'"
+          echo "AWS_ACCOUNT_ID from build job: '$AWS_ACCOUNT_ID'"
           echo "ECR_REPOSITORY value: '${{ env.ECR_REPOSITORY }}'"
           echo "IMAGE_TAG value: '${{ env.IMAGE_TAG }}'"
+          
+          # Construct ECR registry if empty
+          if [ -z "$ECR_REGISTRY" ]; then
+            echo "⚠️ ECR_REGISTRY is empty, constructing manually..."
+            if [ -n "$AWS_ACCOUNT_ID" ]; then
+              ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+              echo "Manually constructed ECR_REGISTRY: $ECR_REGISTRY"
+            else
+              echo "❌ Cannot construct ECR registry - AWS_ACCOUNT_ID is also empty"
+              exit 1
+            fi
+          fi
           
           # Test if ECR image can be pulled
           NEW_IMAGE="$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"
           echo "Testing if image can be pulled: $NEW_IMAGE"
           
+          docker pull $NEW_IMAGE && echo "✅ Image pull successful" || echo "❌ Image pull failed"
+          
+          # Export for next step
+          echo "FINAL_ECR_REGISTRY=$ECR_REGISTRY" >> $GITHUB_ENV
+      - name: Update deployment image
+        run: |
+          # Use the corrected ECR registry from previous step
+          ECR_REGISTRY="${{ env.FINAL_ECR_REGISTRY }}"
+          
           if [ -z "$ECR_REGISTRY" ]; then
-            echo "❌ ECR_REGISTRY is empty! This will cause image pull failures."
-            exit 1
+            # Fallback to manual construction if still empty
+            AWS_ACCOUNT_ID="${{ needs.build-and-push.outputs.aws-account-id }}"
+            ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+            echo "Using fallback ECR registry: $ECR_REGISTRY"
           fi
           
-          docker pull $NEW_IMAGE && echo \"✅ Image pull successful\" || echo \"❌ Image pull failed\"
-      - name: Update deployment image
-        env:
-          ECR_REGISTRY: ${{ needs.build-and-push.outputs.ecr-registry }}
-        run: |
           NEW_IMAGE="$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"
           echo "Updating deployment with image: $NEW_IMAGE"
           
           # Validate image name format
           if [ -z "$ECR_REGISTRY" ]; then
-            echo "❌ Error: ECR_REGISTRY is empty"
+            echo "❌ Error: ECR_REGISTRY is still empty"
             exit 1
           fi
           
-          if [[ ! "$NEW_IMAGE" =~ ^[a-z0-9.-]+\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/.+ ]]; then
+          if [[ ! "$NEW_IMAGE" =~ ^[0-9]+\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/.+ ]]; then
             echo "❌ Error: Invalid image format: $NEW_IMAGE"
             echo "Expected format: <account>.dkr.ecr.<region>.amazonaws.com/<repository>:<tag>"
             exit 1
