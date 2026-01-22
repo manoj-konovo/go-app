@@ -50,7 +50,7 @@ jobs:
       - name: Construct ECR registry
         id: construct-ecr
         run: |
-          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          AWS_ACCOUNT_ID="${{ steps.debug-aws.outputs.aws-account-id }}"
           ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
           echo "ECR Registry: $ECR_REGISTRY"
           echo "ecr-registry=$ECR_REGISTRY" >> $GITHUB_OUTPUT
@@ -91,6 +91,14 @@ jobs:
       - name: Update kubeconfig
         run: aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
 
+      - name: Construct ECR registry for deploy
+        id: deploy-ecr
+        run: |
+          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+          echo "Deploy ECR Registry: $ECR_REGISTRY"
+          echo "ecr-registry=$ECR_REGISTRY" >> $GITHUB_OUTPUT
+
       - name: Apply namespace
         run: kubectl apply -f k8s/namespace.yaml
 
@@ -113,7 +121,8 @@ jobs:
 
       - name: Debug before deployment update
         env:
-          ECR_REGISTRY: ${{ needs.build-and-push.outputs.ecr-registry }}
+          ECR_REGISTRY_BUILD: ${{ needs.build-and-push.outputs.ecr-registry }}
+          ECR_REGISTRY_DEPLOY: ${{ steps.deploy-ecr.outputs.ecr-registry }}
           AWS_ACCOUNT_ID: ${{ needs.build-and-push.outputs.aws-account-id }}
         run: |
           echo "Current deployment status:"
@@ -121,7 +130,12 @@ jobs:
           kubectl get pods --namespace go-app -l app=go-app -o wide
           kubectl get events --namespace go-app --sort-by='.lastTimestamp' | tail -10          
           
-          # Use manually constructed ECR registry
+          # Debug ECR registries
+          echo "ECR Registry from build job: '$ECR_REGISTRY_BUILD'"
+          echo "ECR Registry from deploy job: '$ECR_REGISTRY_DEPLOY'"
+          
+          # Use deploy-constructed ECR registry as primary
+          ECR_REGISTRY="$ECR_REGISTRY_DEPLOY"
           echo "Using ECR Registry: $ECR_REGISTRY"
           
           # Test if ECR image can be pulled
@@ -131,7 +145,7 @@ jobs:
           docker pull $NEW_IMAGE && echo "✅ Image pull successful" || echo "❌ Image pull failed"
       - name: Update deployment image
         env:
-          ECR_REGISTRY: ${{ needs.build-and-push.outputs.ecr-registry }}
+          ECR_REGISTRY: ${{ steps.deploy-ecr.outputs.ecr-registry }}
         run: |
           NEW_IMAGE="$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"
           echo "Updating deployment with image: $NEW_IMAGE"
